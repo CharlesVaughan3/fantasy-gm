@@ -5,6 +5,7 @@ from html.parser import HTMLParser
 from itertools import combinations
 import math
 import re
+import shutil
 import subprocess
 import time
 import unicodedata
@@ -58,7 +59,7 @@ def grade(x):
 
 @st.cache_data(ttl=300)
 def sget(path):
-    r = requests.get(f"{SLEEPER}{path}", timeout=30, headers={"User-Agent": "FantasyGM/3.5"})
+    r = requests.get(f"{SLEEPER}{path}", timeout=30, headers={"User-Agent": "FantasyGM/3.6"})
     r.raise_for_status()
     return r.json()
 
@@ -117,18 +118,85 @@ class TableParser(HTMLParser):
             self.table = None
 
 
-@st.cache_data(ttl=21600)
+@st.cache_data(ttl=21600, show_spinner=False)
 def market_html():
-    p = subprocess.run(
-        ["curl.exe", "--fail", "--silent", "--show-error", "--location", "--compressed",
-         "--connect-timeout", "15", "--max-time", "45", "-A", "Mozilla/5.0", MARKET_URL],
-        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=50
-    )
-    if p.returncode != 0:
-        raise RuntimeError(p.stderr.strip())
-    if not p.stdout.strip():
+    """Fetch the trade-value chart on both Windows and Linux.
+
+    Local Windows builds can use curl.exe, while Streamlit Community Cloud
+    normally exposes curl on Linux. Requests is retained as a final fallback.
+    """
+    curl_bin = shutil.which("curl.exe") or shutil.which("curl")
+
+    curl_error = None
+
+    if curl_bin:
+        try:
+            p = subprocess.run(
+                [
+                    curl_bin,
+                    "--fail",
+                    "--silent",
+                    "--show-error",
+                    "--location",
+                    "--compressed",
+                    "--connect-timeout",
+                    "15",
+                    "--max-time",
+                    "45",
+                    "-A",
+                    "Mozilla/5.0",
+                    MARKET_URL,
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=50,
+            )
+
+            if p.returncode == 0 and p.stdout.strip():
+                return p.stdout.strip().lstrip("\ufeff")
+
+            curl_error = p.stderr.strip() or f"curl exited with code {p.returncode}"
+
+        except Exception as exc:
+            curl_error = str(exc)
+
+    # Final cross-platform fallback. This is especially useful if a hosting
+    # environment does not include the curl command.
+    try:
+        r = requests.get(
+            MARKET_URL,
+            timeout=45,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (X11; Linux x86_64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/126.0 Safari/537.36"
+                ),
+                "Accept": (
+                    "text/html,application/xhtml+xml,application/xml;"
+                    "q=0.9,image/avif,image/webp,*/*;q=0.8"
+                ),
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+        )
+        r.raise_for_status()
+
+        if r.text.strip():
+            return r.text.strip().lstrip("\ufeff")
+
         raise RuntimeError("Market-value page returned an empty response.")
-    return p.stdout.strip().lstrip("\ufeff")
+
+    except Exception as exc:
+        details = f"requests fallback failed: {exc}"
+        if curl_error:
+            details = f"curl failed: {curl_error}; {details}"
+
+        raise RuntimeError(
+            "Could not load the market-value chart from this environment. "
+            + details
+        )
 
 
 def parse_market(html, dynasty):
@@ -1640,7 +1708,7 @@ def three_way_solver(
     return output, stats
 
 st.title("🏈 Fantasy GM")
-st.caption("Phase 3.5 — flexible 3-way trade solver + rejection diagnostics + fast league-only caching.")
+st.caption("Phase 3.6 — public deployment build: fast cached analysis + smart 2-way and 3-way trade solving.")
 
 with st.sidebar:
     st.header("Sleeper Connection")
@@ -2723,4 +2791,4 @@ with tabs[6]:
     st.dataframe(pd.DataFrame(rows).sort_values("Direct Match %", ascending=False), width="stretch", hide_index=True)
 
 st.divider()
-st.caption("Phase 3.5 — flexible 3-way solver with organization-benefit scoring, rejection diagnostics, and cached performance.")
+st.caption("Phase 3.6 — deployment-ready Fantasy GM with cross-platform market loading, cached league analysis, and 3-way trade solving.")
